@@ -10,7 +10,7 @@ function runQuery(config, query) {
     const connection = new Connection({
       server: config.host,
       authentication: {
-        type: "azure-active-directory-password",
+        type: "default",
         options: {
           userName: config.user,
           password: config.password,
@@ -19,29 +19,24 @@ function runQuery(config, query) {
       options: {
         database: config.database,
         encrypt: true,
-        port: 1433,
+        trustServerCertificate: false,
         connectTimeout: 30000,
-        requestTimeout: 60000,
+        requestTimeout: 30000,
       },
     });
 
     connection.on("connect", (err) => {
       if (err) return reject(err);
-
       const request = new TdsRequest(query, (err, rowCount) => {
-        connection.close();
         if (err) return reject(err);
+        connection.close();
         resolve(rows);
       });
-
       request.on("row", (columns) => {
         const row = {};
-        columns.forEach((col) => {
-          row[col.metadata.colName] = col.value;
-        });
+        columns.forEach((col) => (row[col.metadata.colName] = col.value));
         rows.push(row);
       });
-
       connection.execSql(request);
     });
 
@@ -50,37 +45,41 @@ function runQuery(config, query) {
 }
 
 const server = http.createServer(async (req, res) => {
-  res.setHeader("Content-Type", "application/json");
-
   if (req.method === "OPTIONS") {
-    res.writeHead(200);
-    return res.end("ok");
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "*",
+    });
+    return res.end();
   }
 
   if (req.method !== "POST") {
     res.writeHead(405);
-    return res.end(JSON.stringify({ error: "POST only" }));
+    return res.end(JSON.stringify({ error: "Method not allowed" }));
   }
 
-  const auth = req.headers["authorization"] || "";
-  if (PROXY_SECRET && auth !== `Bearer ${PROXY_SECRET}`) {
-    res.writeHead(401);
-    return res.end(JSON.stringify({ error: "Unauthorized" }));
+  if (PROXY_SECRET) {
+    const auth = req.headers["authorization"] || "";
+    if (auth !== `Bearer ${PROXY_SECRET}`) {
+      res.writeHead(401);
+      return res.end(JSON.stringify({ error: "Unauthorized" }));
+    }
   }
-
-  let body = "";
-  for await (const chunk of req) body += chunk;
 
   try {
-    const { host, database, user, password, query } = JSON.parse(body);
+    const body = await new Promise((resolve) => {
+      let data = "";
+      req.on("data", (chunk) => (data += chunk));
+      req.on("end", () => resolve(JSON.parse(data)));
+    });
 
+    const { host, database, user, password, query } = body;
     if (!host || !database || !user || !password || !query) {
       res.writeHead(400);
       return res.end(JSON.stringify({ error: "Missing fields: host, database, user, password, query" }));
     }
 
     const rows = await runQuery({ host, database, user, password }, query);
-
     res.writeHead(200);
     res.end(JSON.stringify({ success: true, rowCount: rows.length, rows }));
   } catch (err) {
