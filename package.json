@@ -1,0 +1,11 @@
+{
+  "name": "fabric-proxy",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "tedious": "^18.1.0"
+  }
+}
